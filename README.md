@@ -1,11 +1,12 @@
 # MCP Git Explorer
 
-A tool for exploring Git repositories through Claude using the Model Context Protocol (MCP).
+Simple MCP (Model Context Protocol) server for fetching the remote git repository content as a structured text file.
 
 ## Features
 
 - Clone and analyze Git repositories
 - Generate a structured text representation of repository contents
+- Quickly estimate codebase size and token count without retrieving all content
 - Support for public repositories and private GitLab repositories with token authentication
 - Tokenization counting using OpenAI's tiktoken library
 - Respect for .gitignore and .repomixignore patterns
@@ -58,10 +59,17 @@ MCP Git Explorer provides Claude with the ability to:
 1. Explore Git repositories without needing to manually download and upload files
 2. Access the full contents of repositories, with automatic token counting
 3. Navigate through repository structure and file contents
+4. Quickly assess repository size before deciding whether to retrieve full content
+
+#### When to use which tool
+
+- Use `estimate_codebase` when you want to quickly check the size and structure of a repository before analyzing its contents. This is especially useful for large repositories where you need to check if retrieving the full content is feasible within token limits.
+- Use `get_codebase` when you need to analyze the actual code and content of the files in the repository.
 
 #### Available Tools
 
-- `get_codebase(repo_url: str, use_token: bool = True) -> str`: Clone and analyze a Git repository
+- `get_codebase(repo_url: str, use_token: bool = True) -> str`: Clone and analyze a Git repository, returning full file contents
+- `estimate_codebase(repo_url: str, use_token: bool = True) -> str`: Quick analysis providing repository statistics including file count, structure, and token estimation
 - `check_gitlab_token_status() -> str`: Check if a GitLab token is configured
 
 ## Development
@@ -70,7 +78,7 @@ MCP Git Explorer provides Claude with the ability to:
 
 ```bash
 # Clone the repository
-git clone https://github.com/jmiedzinski/mcp_git_explorer.git
+git clone https://github.com/jmiedzinski/mcp-git-explorer.git
 cd mcp-git-explorer
 
 # Install development dependencies
@@ -85,6 +93,9 @@ python -m mcp_git_explorer.cli
 
 # Run via MCP CLI
 mcp dev mcp_git_explorer/cli.py
+
+# Run via uvx
+uvx mcp-git-explorer
 ```
 
 ## License

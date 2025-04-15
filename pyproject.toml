@@ -1,6 +1,6 @@
 [project]
 name = "mcp-git-explorer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simple MCP server for fetching the remote git repository content as a structured text file"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,8 +24,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jmiedzinski/mcp_git_explorer"
-Issues = "https://github.com/jmiedzinski/mcp_git_explorer/issues"
+Homepage = "https://github.com/jmiedzinski/mcp-git-explorer"
+Issues = "https://github.com/jmiedzinski/mcp-git-explorer/issues"
 
 [project.scripts]
 mcp-git-explorer = "mcp_git_explorer.cli:main"
