@@ -11,3 +11,4 @@ wheels/
 
 # Repomix
 codebase.txt
+.coverage
