@@ -21,15 +21,41 @@ class GitExplorer:
         self.mcp.tool()(self.get_codebase)
         self.mcp.tool()(self.estimate_codebase)
         self.mcp.tool()(self.check_gitlab_token_status)
+        self.mcp.tool()(self.get_file)
+
+    def _clone_repository(self, repo_url: str, use_token: bool = True) -> str:
+        """Clone a Git repository into a temporary directory and return the path."""
+        import git
+        from urllib.parse import urlparse
+        import shutil
+        import tempfile
+
+        authenticated_url = repo_url
+        if use_token and self.settings.gitlab_token:
+            parsed_url = urlparse(repo_url)
+            netloc = f"oauth2:{self.settings.gitlab_token}@{parsed_url.netloc}"
+            authenticated_url = parsed_url._replace(netloc=netloc).geturl()
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            git.Repo.clone_from(authenticated_url, temp_dir, depth=1)
+            # Remove .git directory to save space and simplify processing
+            git_dir = os.path.join(temp_dir, ".git")
+            if os.path.exists(git_dir):
+                shutil.rmtree(git_dir)
+            return temp_dir
+        except Exception as e:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     def _process_repository(self, repo_url: str, use_token: bool = True):
         """
         Clone and process a Git repository, returning repository information.
-        
+
         Args:
             repo_url (str): The URL of the Git repository to clone
             use_token (bool): Whether to use GitLab token for authentication
-            
+
         Returns:
             dict: Repository information including:
                 - temp_dir: Path to cloned repository
@@ -41,7 +67,7 @@ class GitExplorer:
         """
         import git
         import tiktoken
-        
+
         result = {
             "temp_dir": None,
             "repo_structure": "",
@@ -50,25 +76,12 @@ class GitExplorer:
             "token_count": 0,
             "error": None
         }
-        
-        authenticated_url = repo_url
-        if use_token and self.settings.gitlab_token:
-            parsed_url = urlparse(repo_url)
-            netloc = f"oauth2:{self.settings.gitlab_token}@{parsed_url.netloc}"
-            authenticated_url = parsed_url._replace(netloc=netloc).geturl()
-        
-        temp_dir = tempfile.mkdtemp()
-        result["temp_dir"] = temp_dir
-        
+
         try:
             # Clone the repository
-            git.Repo.clone_from(authenticated_url, temp_dir, depth=1)
-            
-            # Remove .git directory
-            git_dir = os.path.join(temp_dir, ".git")
-            if os.path.exists(git_dir):
-                shutil.rmtree(git_dir)
-            
+            temp_dir = self._clone_repository(repo_url, use_token)
+            result["temp_dir"] = temp_dir
+
             # Get ignore patterns
             ignore_patterns = []
             gitignore_path = os.path.join(temp_dir, ".gitignore")
@@ -78,7 +91,7 @@ class GitExplorer:
                         line = line.strip()
                         if line and not line.startswith('#'):
                             ignore_patterns.append(line)
-            
+
             repomixignore_path = os.path.join(temp_dir, ".repomixignore")
             if os.path.exists(repomixignore_path):
                 with open(repomixignore_path, 'r', errors='replace') as f:
@@ -86,11 +99,11 @@ class GitExplorer:
                         line = line.strip()
                         if line and not line.startswith('#'):
                             ignore_patterns.append(line)
-            
+
             # Generate repository structure
             repo_structure = self._generate_repo_structure(temp_dir)
             result["repo_structure"] = repo_structure
-            
+
             # Count files and generate content
             files = []
             root_path = Path(temp_dir)
@@ -102,23 +115,23 @@ class GitExplorer:
                             files.append(path)
                     except Exception:
                         pass
-            
+
             result["file_count"] = len(files)
-            
+
             # Generate files content if needed
             files_content = self._concatenate_files_from_list(root_path, files)
             result["files_content"] = files_content
-            
+
             # Count tokens
             enc = tiktoken.get_encoding("o200k_base")
-            
+
             # Create content for token estimation
             sample_content = f"{repo_structure}\n\n{files_content}"
             tokens = enc.encode(sample_content)
             result["token_count"] = len(tokens)
-            
+
             return result
-            
+
         except git.GitCommandError as e:
             if "Authentication failed" in str(e):
                 result["error"] = (
@@ -133,53 +146,107 @@ class GitExplorer:
             result["error"] = f"An error occurred: {str(e)}"
             return result
 
+    def _get_single_file(self, repo_url: str, file_path: str, use_token: bool = True) -> str:
+        """Clone a repository and return the content of a single specified file."""
+        temp_dir = None
+        try:
+            temp_dir = self._clone_repository(repo_url, use_token)
+            full_path = os.path.join(temp_dir, file_path)
+            if not os.path.exists(full_path):
+                raise FileNotFoundError(f"The file {file_path} does not exist in the repository.")
+            if not os.path.isfile(full_path):
+                raise IsADirectoryError(f"The path {file_path} is not a file.")
+            with open(full_path, 'r', errors='replace') as f:
+                content = f.read()
+            return content
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def get_file(self, repo_url: str, file_path: str, use_token: bool = True) -> str:
+        """
+        Fetch the content of a single specified file from a Git repository.
+
+        This tool clones a Git repository from the provided URL, reads the content
+        of the specified file, and returns it as a string. The repository is cloned
+        with depth=1 for efficiency. If the file does not exist or an error occurs,
+        an appropriate error message is returned.
+
+        Args:
+            repo_url (str): The URL of the Git repository to clone.
+            file_path (str): The relative path to the file within the repository.
+            use_token (bool, optional): Whether to use the GitLab token for authentication.
+                                       Defaults to True.
+
+        Returns:
+            str: The content of the specified file, or an error message if retrieval fails.
+        """
+        try:
+            content = self._get_single_file(repo_url, file_path, use_token)
+            return content
+        except FileNotFoundError as e:
+            return str(e)
+        except IsADirectoryError as e:
+            return str(e)
+        except git.GitCommandError as e:
+            if "Authentication failed" in str(e):
+                return (
+                    f"Authentication error while accessing repository {repo_url}.\n"
+                    "Make sure the repository is public or a valid access token "
+                    "has been set in the GIT_EXPLORER_GITLAB_TOKEN environment variable."
+                )
+            else:
+                return f"Git error: {str(e)}"
+        except Exception as e:
+            return f"An error occurred: {str(e)}"
+
     async def estimate_codebase(self, repo_url: str, use_token: bool = True) -> str:
         """
         Get statistics about a Git repository without downloading all content.
-        
+
         This tool clones a git repository from the provided URL, analyzes its structure,
         and returns statistical information useful for LLM processing, including:
         - Estimated token count
         - Total file count
         - Repository structure
-        
+
         Args:
             repo_url (str): The URL of the Git repository to clone
             use_token (bool, optional): Whether to use the GitLab token for authentication.
                                        Defaults to True.
-        
+
         Returns:
             str: A formatted text representation of the repository statistics
-            
+
         Raises:
             GitCommandError: If there is an error during the git clone operation
             Exception: For any other errors that occur during processing
         """
         result = None
         temp_dir = None
-        
+
         try:
             # Process the repository
             result = self._process_repository(repo_url, use_token)
             temp_dir = result["temp_dir"]
-            
+
             if result["error"]:
                 return result["error"]
-            
+
             # Format the output
             output = textwrap.dedent(f"""
             # Git Repository Statistics: {repo_url}
-            
+
             ## Summary:
             - Estimated token count (o200k_base encoding): {result["token_count"]:,}
             - Total files: {result["file_count"]:,}
-            
+
             ## Repository Structure:
             {result["repo_structure"]}
             """).strip()
-            
+
             return output
-            
+
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
@@ -187,37 +254,37 @@ class GitExplorer:
     async def get_codebase(self, repo_url: str, use_token: bool = True) -> str:
         """
         Clone a Git repository and generate a structured text file containing its contents.
-        
+
         This tool clones a git repository from the provided URL, processes its contents,
         and returns a single text file containing the repository structure and the content
         of all files. Binary files and empty text files are excluded. The tool respects
         .gitignore and .repomixignore patterns. The output includes an estimated token count
         using the o200k_base encoding.
-        
+
         Args:
             repo_url (str): The URL of the Git repository to clone
             use_token (bool, optional): Whether to use the GitLab token for authentication.
                                        Defaults to True.
-                                       
+
         Returns:
             str: A formatted text representation of the repository contents, including
                  file structure, estimated token count, and the content of all text files.
-                 
+
         Raises:
             GitCommandError: If there is an error during the git clone operation
             Exception: For any other errors that occur during processing
         """
         result = None
         temp_dir = None
-        
+
         try:
             # Process the repository
             result = self._process_repository(repo_url, use_token)
             temp_dir = result["temp_dir"]
-            
+
             if result["error"]:
                 return result["error"]
-            
+
             # Create preamble with token information
             preamble = textwrap.dedent(f"""
             # Git Repository: {repo_url}
@@ -228,17 +295,17 @@ class GitExplorer:
             Below you'll find the repository structure and the full content of all files.
             Each file is preceded by a separator indicating the beginning of the file and
             followed by a separator indicating the end of the file, along with the full path to the file.
-            
+
             ## Repository Structure:
             {result["repo_structure"]}
-            
+
             ## File Contents:
             """).strip()
-            
+
             # Create final content
             output = f"{preamble}\n\n{result['files_content']}"
             return output
-            
+
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
@@ -299,7 +366,7 @@ class GitExplorer:
                 if path.is_dir():
                     _add_directory(
                         path,
-                        prefix + ('    ' if is_last else '│   ')
+                        prefix + ('151    ' if is_last else '│   ')
                     )
         _add_directory(Path(repo_path))
         return "\n".join(result)
@@ -352,5 +419,5 @@ class GitExplorer:
             if path.is_file():
                 if not self._should_ignore_file(path, root_path, ignore_patterns) and not self._is_binary_file(path):
                     all_files.append(path)
-        
+
         return self._concatenate_files_from_list(root_path, all_files)
